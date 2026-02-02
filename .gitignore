@@ -1,0 +1,16 @@
+# Data directories
+data/
+.terra/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker
+*.log

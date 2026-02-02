@@ -1,0 +1,33 @@
+# LocalTerra Docker Compose
+#
+# Usage:
+#   docker compose up -d
+#
+# This starts a local Terra Classic blockchain with:
+# - Fast block times (~200ms)
+# - Pre-funded test accounts
+# - All APIs enabled
+
+services:
+  localterra:
+    image: ghcr.io/plasticdigits/localterra-cl8y:latest
+    # Or build locally:
+    # build: .
+    ports:
+      - "26657:26657"  # Tendermint RPC
+      - "1317:1317"    # REST/LCD API
+      - "9090:9090"    # gRPC
+      - "9091:9091"    # gRPC-web
+    volumes:
+      # Persist chain data (optional)
+      - localterra-data:/home/terra/.terra
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:26657/status"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  localterra-data:
