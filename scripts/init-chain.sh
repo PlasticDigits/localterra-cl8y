@@ -44,14 +44,13 @@ terrad add-genesis-account "$TEST_ADDRESS" \
 10000000000000ueur,\
 10000000000000ugbp,\
 10000000000000ujpy,\
-10000000000000ucny,\
-100000000000stake \
+10000000000000ucny \
     --keyring-backend test \
     --home "$TERRA_HOME"
 
 # Create validator genesis transaction
 echo "[4/6] Creating validator..."
-terrad gentx test1 10000000stake \
+terrad gentx test1 10000000uluna \
     --chain-id "$CHAIN_ID" \
     --keyring-backend test \
     --home "$TERRA_HOME"
