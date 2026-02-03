@@ -19,6 +19,10 @@
 # ============================================================================
 FROM golang:1.24-bookworm AS builder
 
+# Terra Classic core version to build
+# Default matches current mainnet - override with --build-arg TERRA_VERSION=vX.Y.Z
+ARG TERRA_VERSION=v3.6.2
+
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
     git \
@@ -28,17 +32,33 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone classic-terra/core
+# Clone classic-terra/core at specified version
 WORKDIR /build
-RUN git clone --depth 1 --branch main https://github.com/classic-terra/core.git .
+RUN git clone --depth 1 --branch ${TERRA_VERSION} https://github.com/classic-terra/core.git .
 
 # Build terrad (using glibc-based libwasmvm)
 RUN make install
+
+# Find and copy libwasmvm to a known location for the next stage
+# The path varies by wasmvm version (v1.x, v2.x, v3.x have different module paths)
+# Must use x86_64 version for linux/amd64 platform
+RUN WASMVM_SO=$(find /go/pkg/mod -name "libwasmvm.x86_64.so" -type f | head -1) && \
+    cp "$WASMVM_SO" /usr/lib/ && \
+    cd /usr/lib && \
+    ln -sf libwasmvm.x86_64.so libwasmvm.so
 
 # ============================================================================
 # Stage 2: Runtime image with pre-configured chain
 # ============================================================================
 FROM debian:bookworm-slim
+
+# Re-declare ARG to use in this stage (ARGs don't persist across FROM)
+ARG TERRA_VERSION=v3.6.2
+
+# Labels for image metadata
+LABEL org.opencontainers.image.source="https://github.com/PlasticDigits/localterra-cl8y"
+LABEL org.opencontainers.image.description="LocalTerra Classic - Pre-configured Terra Classic for local development"
+LABEL org.opencontainers.image.terra-core-version="${TERRA_VERSION}"
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
@@ -50,8 +70,8 @@ RUN apt-get update && apt-get install -y \
 # Copy terrad binary
 COPY --from=builder /go/bin/terrad /usr/local/bin/terrad
 
-# Copy libwasmvm
-COPY --from=builder /go/pkg/mod/github.com/!cosm!wasm/wasmvm/v3@*/internal/api/libwasmvm.x86_64.so /usr/lib/
+# Copy libwasmvm (copied to /usr/lib in builder stage for portability across wasmvm versions)
+COPY --from=builder /usr/lib/libwasmvm* /usr/lib/
 
 # Create terra user and home directory
 RUN useradd -m -u 1000 terra && \

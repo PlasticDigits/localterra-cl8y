@@ -1,0 +1,268 @@
+# Sync Docker images with Terra Classic core releases
+#
+# This workflow:
+# 1. Checks for new mainnet version every 6 hours and builds if changed
+# 2. Can backfill all missing stable release tags on demand
+#
+# Only stable releases are built (no rc, alpha, beta suffixes)
+# The 'latest' tag always points to the current mainnet version
+
+name: Sync Terra Classic Releases
+
+on:
+  schedule:
+    # Check for new mainnet version every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      backfill_all:
+        description: 'Build all missing stable releases (not just mainnet version)'
+        required: false
+        type: boolean
+        default: false
+      include_rc:
+        description: 'Include release candidates (rc) in backfill'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # ===========================================================================
+  # Job 1: Discover which versions need to be built
+  # ===========================================================================
+  discover-versions:
+    runs-on: ubuntu-latest
+    outputs:
+      mainnet_version: ${{ steps.mainnet.outputs.version }}
+      mainnet_needs_build: ${{ steps.check-mainnet.outputs.needs_build }}
+      missing_releases: ${{ steps.check-releases.outputs.missing }}
+      has_missing: ${{ steps.check-releases.outputs.has_missing }}
+      image_name: ${{ steps.image.outputs.name }}
+    
+    steps:
+      - name: Set image name (lowercase)
+        id: image
+        run: |
+          # Docker requires lowercase repository names
+          echo "name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+
+      - name: Get current mainnet version
+        id: mainnet
+        run: |
+          echo "Querying Terra Classic mainnet for current version..."
+          VERSION=""
+          
+          # Try multiple LCD endpoints for resilience
+          # Using /cosmos/base/tendermint/v1beta1/node_info which returns application_version.version
+          ENDPOINTS=(
+            "https://terra-classic-lcd.publicnode.com/cosmos/base/tendermint/v1beta1/node_info"
+            "https://lcd.terra-classic.hexxagon.io/cosmos/base/tendermint/v1beta1/node_info"
+          )
+          
+          for endpoint in "${ENDPOINTS[@]}"; do
+            echo "Trying: $endpoint"
+            RESULT=$(curl -sf --max-time 10 "$endpoint" 2>/dev/null) || continue
+            VERSION=$(echo "$RESULT" | jq -r '.application_version.version // empty')
+            
+            # Check if we got a valid version (not empty, not null)
+            if [[ -n "$VERSION" && "$VERSION" != "null" ]]; then
+              echo "Got version from $endpoint: $VERSION"
+              break
+            fi
+            VERSION=""
+          done
+          
+          # Fail if all LCD queries failed (scheduled job should retry later)
+          if [[ -z "$VERSION" ]]; then
+            echo "::error::Failed to query mainnet version from all LCD endpoints"
+            exit 1
+          fi
+          
+          # Ensure version has 'v' prefix
+          if [[ ! "$VERSION" =~ ^v ]]; then
+            VERSION="v${VERSION}"
+          fi
+          
+          echo "Mainnet version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check if mainnet version image exists
+        id: check-mainnet
+        run: |
+          VERSION="${{ steps.mainnet.outputs.version }}"
+          IMAGE_NAME="${{ steps.image.outputs.name }}"
+          IMAGE="${{ env.REGISTRY }}/${IMAGE_NAME}:${VERSION}"
+          
+          echo "Checking if image exists: $IMAGE"
+          
+          if docker manifest inspect "$IMAGE" > /dev/null 2>&1; then
+            echo "Image already exists for $VERSION"
+            echo "needs_build=false" >> $GITHUB_OUTPUT
+          else
+            echo "Image does not exist for $VERSION - needs build"
+            echo "needs_build=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get all stable releases from GitHub
+        id: get-releases
+        if: inputs.backfill_all == true
+        run: |
+          echo "Fetching all tags from classic-terra/core..."
+          
+          # Get all tags (paginated, up to 100)
+          ALL_TAGS=$(curl -sf "https://api.github.com/repos/classic-terra/core/tags?per_page=100" | jq -r '.[].name')
+          
+          if [[ "${{ inputs.include_rc }}" == "true" ]]; then
+            # Include RC versions
+            STABLE_TAGS=$(echo "$ALL_TAGS" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | sort -V)
+          else
+            # Only stable releases (no rc, alpha, beta, etc.)
+            STABLE_TAGS=$(echo "$ALL_TAGS" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V)
+          fi
+          
+          echo "Found stable tags:"
+          echo "$STABLE_TAGS"
+          
+          # Save to file for next step
+          echo "$STABLE_TAGS" > /tmp/stable_tags.txt
+
+      - name: Check which releases are missing
+        id: check-releases
+        if: inputs.backfill_all == true
+        run: |
+          MISSING_TAGS="[]"
+          IMAGE_NAME="${{ steps.image.outputs.name }}"
+          
+          while IFS= read -r tag; do
+            if [[ -z "$tag" ]]; then
+              continue
+            fi
+            
+            IMAGE="${{ env.REGISTRY }}/${IMAGE_NAME}:${tag}"
+            
+            if docker manifest inspect "$IMAGE" > /dev/null 2>&1; then
+              echo "✓ $tag exists"
+            else
+              echo "✗ $tag missing"
+              MISSING_TAGS=$(echo "$MISSING_TAGS" | jq --arg t "$tag" '. + [$t]')
+            fi
+          done < /tmp/stable_tags.txt
+          
+          echo "Missing tags: $MISSING_TAGS"
+          echo "missing=$MISSING_TAGS" >> $GITHUB_OUTPUT
+          
+          # Check if there are any missing
+          COUNT=$(echo "$MISSING_TAGS" | jq 'length')
+          if [[ "$COUNT" -gt 0 ]]; then
+            echo "has_missing=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_missing=false" >> $GITHUB_OUTPUT
+          fi
+
+  # ===========================================================================
+  # Job 2: Build mainnet version if needed (runs on schedule)
+  # ===========================================================================
+  build-mainnet:
+    needs: discover-versions
+    if: needs.discover-versions.outputs.mainnet_needs_build == 'true'
+    uses: ./.github/workflows/docker-publish.yml
+    with:
+      terra_version: ${{ needs.discover-versions.outputs.mainnet_version }}
+      tag_as_latest: true
+    permissions:
+      contents: read
+      packages: write
+
+  # ===========================================================================
+  # Job 3: Build all missing releases (manual backfill)
+  # ===========================================================================
+  build-missing-releases:
+    needs: discover-versions
+    if: inputs.backfill_all == true && needs.discover-versions.outputs.has_missing == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
+    strategy:
+      fail-fast: false
+      max-parallel: 3  # Don't overwhelm GitHub Actions
+      matrix:
+        version: ${{ fromJson(needs.discover-versions.outputs.missing_releases) }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine if this is mainnet version
+        id: check-mainnet
+        run: |
+          if [[ "${{ matrix.version }}" == "${{ needs.discover-versions.outputs.mainnet_version }}" ]]; then
+            echo "is_mainnet=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_mainnet=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate tags
+        id: tags
+        run: |
+          IMAGE_NAME="${{ needs.discover-versions.outputs.image_name }}"
+          TAGS="${{ env.REGISTRY }}/${IMAGE_NAME}:${{ matrix.version }}"
+          
+          # Add 'latest' tag only if this is the mainnet version
+          if [[ "${{ steps.check-mainnet.outputs.is_mainnet }}" == "true" ]]; then
+            TAGS="$TAGS,${{ env.REGISTRY }}/${IMAGE_NAME}:latest"
+          fi
+          
+          echo "tags=$TAGS" >> $GITHUB_OUTPUT
+
+      - name: Build and push ${{ matrix.version }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            TERRA_VERSION=${{ matrix.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ needs.discover-versions.outputs.image_name }}
+            org.opencontainers.image.terra-core-version=${{ matrix.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ===========================================================================
+  # Job 4: Summary
+  # ===========================================================================
+  summary:
+    needs: [discover-versions, build-mainnet, build-missing-releases]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## Sync Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Mainnet Status" >> $GITHUB_STEP_SUMMARY
+          echo "- **Current mainnet version:** ${{ needs.discover-versions.outputs.mainnet_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Needed build:** ${{ needs.discover-versions.outputs.mainnet_needs_build }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ inputs.backfill_all }}" == "true" ]]; then
+            echo "### Backfill Status" >> $GITHUB_STEP_SUMMARY
+            echo "- **Missing releases:** ${{ needs.discover-versions.outputs.missing_releases }}" >> $GITHUB_STEP_SUMMARY
+          fi

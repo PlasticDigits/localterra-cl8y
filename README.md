@@ -17,7 +17,11 @@ The official `classic-terra/localterra` repository doesn't publish pre-built Doc
 ### Using GitHub Container Registry (Recommended)
 
 ```bash
+# Use the current mainnet version (recommended)
 docker run -p 26657:26657 -p 1317:1317 -p 9090:9090 ghcr.io/plasticdigits/localterra-cl8y:latest
+
+# Or pin to a specific Terra Classic core version
+docker run -p 26657:26657 -p 1317:1317 -p 9090:9090 ghcr.io/plasticdigits/localterra-cl8y:v3.6.2
 ```
 
 ### Using Docker Compose
@@ -158,6 +162,25 @@ docker run -p 26657:26657 -p 1317:1317 localterra-cl8y
 | Auto-initialization | ❌ Manual | ✅ Automatic |
 | API enabled by default | ❌ No | ✅ Yes |
 | Documentation | Minimal | Comprehensive |
+
+## Image Versioning
+
+Images are tagged to match [Terra Classic core releases](https://github.com/classic-terra/core/tags):
+
+| Tag | Description |
+|-----|-------------|
+| `latest` | Current mainnet version (auto-detected from live RPC) |
+| `v3.6.2` | Pinned to Terra Classic core v3.6.2 |
+| `v3.6.1`, `v3.6.0`, ... | All stable releases available |
+
+The `latest` tag always points to the version running on Terra Classic mainnet (columbus-5), never to release candidates. This is auto-detected by querying public RPC endpoints.
+
+### Building a Specific Version
+
+```bash
+# Build with a specific Terra Classic core version
+docker build --build-arg TERRA_VERSION=v3.6.2 -t localterra-cl8y:v3.6.2 .
+```
 
 ## CosmWasm Version
 

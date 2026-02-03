@@ -2,8 +2,12 @@
 #
 # Triggers:
 # - Push to main branch
-# - Release tags (v*)
 # - Manual workflow dispatch
+# - Called by sync-releases workflow
+#
+# The image is tagged with:
+# - The Terra Classic core version (e.g., v3.6.2)
+# - 'latest' when building the current mainnet version
 #
 # No setup required - uses GitHub's built-in container registry (ghcr.io)
 
@@ -13,16 +17,34 @@ on:
   push:
     branches:
       - main
-    tags:
-      - 'v*'
   pull_request:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      terra_version:
+        description: 'Terra Classic core version to build (e.g., v3.6.2). Leave empty to auto-detect mainnet version.'
+        required: false
+        type: string
+      tag_as_latest:
+        description: 'Tag this build as latest'
+        required: false
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      terra_version:
+        description: 'Terra Classic core version to build'
+        required: true
+        type: string
+      tag_as_latest:
+        description: 'Tag this build as latest'
+        required: false
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-and-push:
@@ -34,6 +56,66 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set image name (lowercase)
+        id: image
+        run: |
+          # Docker requires lowercase repository names
+          echo "name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+
+      - name: Get Terra Classic mainnet version
+        id: terra-version
+        run: |
+          # Use provided version or auto-detect from mainnet LCD API
+          if [[ -n "${{ inputs.terra_version }}" ]]; then
+            VERSION="${{ inputs.terra_version }}"
+            echo "Using provided version: $VERSION"
+          else
+            echo "Auto-detecting mainnet version..."
+            VERSION=""
+            
+            # Try multiple LCD endpoints for resilience
+            # Using /cosmos/base/tendermint/v1beta1/node_info which returns application_version.version
+            ENDPOINTS=(
+              "https://terra-classic-lcd.publicnode.com/cosmos/base/tendermint/v1beta1/node_info"
+              "https://lcd.terra-classic.hexxagon.io/cosmos/base/tendermint/v1beta1/node_info"
+            )
+            
+            for endpoint in "${ENDPOINTS[@]}"; do
+              echo "Trying: $endpoint"
+              RESULT=$(curl -sf --max-time 10 "$endpoint" 2>/dev/null) || continue
+              VERSION=$(echo "$RESULT" | jq -r '.application_version.version // empty')
+              
+              # Check if we got a valid version (not empty, not null)
+              if [[ -n "$VERSION" && "$VERSION" != "null" ]]; then
+                echo "Got version from $endpoint: $VERSION"
+                break
+              fi
+              VERSION=""
+            done
+            
+            # Fallback if all LCD queries failed
+            if [[ -z "$VERSION" ]]; then
+              echo "All LCD queries failed, using fallback version"
+              VERSION="v3.6.2"
+            fi
+            
+            # Ensure version has 'v' prefix
+            if [[ ! "$VERSION" =~ ^v ]]; then
+              VERSION="v${VERSION}"
+            fi
+            echo "Detected mainnet version: $VERSION"
+          fi
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+          # Determine if this should be tagged as latest
+          # Latest = mainnet version (auto-detected) OR explicitly requested
+          if [[ -z "${{ inputs.terra_version }}" ]] || [[ "${{ inputs.tag_as_latest }}" == "true" ]]; then
+            echo "is_latest=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_latest=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -49,17 +131,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Generate Docker tags
+        id: tags
+        run: |
+          IMAGE_NAME="${{ steps.image.outputs.name }}"
+          TAGS="${{ env.REGISTRY }}/${IMAGE_NAME}:${{ steps.terra-version.outputs.version }}"
+          
+          # Add 'latest' tag if this is the mainnet version
+          if [[ "${{ steps.terra-version.outputs.is_latest }}" == "true" ]]; then
+            TAGS="$TAGS,${{ env.REGISTRY }}/${IMAGE_NAME}:latest"
+          fi
+          
+          # Add 'main' tag for pushes to main branch
+          if [[ "${{ github.ref }}" == "refs/heads/main" && "${{ github.event_name }}" == "push" ]]; then
+            TAGS="$TAGS,${{ env.REGISTRY }}/${IMAGE_NAME}:main"
+          fi
+          
+          echo "tags=$TAGS" >> $GITHUB_OUTPUT
+          echo "Generated tags: $TAGS"
 
       - name: Build and push
         uses: docker/build-push-action@v5
@@ -67,7 +156,19 @@ jobs:
           context: .
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            TERRA_VERSION=${{ steps.terra-version.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ steps.image.outputs.name }}
+            org.opencontainers.image.terra-core-version=${{ steps.terra-version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Terra Classic Version:** ${{ steps.terra-version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tags:** ${{ steps.tags.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Is Latest:** ${{ steps.terra-version.outputs.is_latest }}" >> $GITHUB_STEP_SUMMARY
