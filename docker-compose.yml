@@ -11,12 +11,12 @@
 services:
   localterra:
     image: ghcr.io/plasticdigits/localterra-cl8y:latest
-    # Pin to specific version: ghcr.io/plasticdigits/localterra-cl8y:v3.6.2
+    # Pin to specific version: ghcr.io/plasticdigits/localterra-cl8y:v4.0.1
     # Or build locally:
     # build:
     #   context: .
     #   args:
-    #     TERRA_VERSION: v3.6.2
+    #     TERRA_VERSION: v4.0.1
     ports:
       - "26657:26657"  # Tendermint RPC
       - "1317:1317"    # REST/LCD API

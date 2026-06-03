@@ -13,6 +13,7 @@ set -e
 TERRA_HOME="${TERRA_HOME:-$HOME/.terra}"
 CHAIN_ID="${CHAIN_ID:-localterra}"
 MONIKER="${MONIKER:-localterra}"
+DENOM="${DENOM:-uluna}"
 
 # Test account mnemonic (DO NOT USE IN PRODUCTION)
 TEST_MNEMONIC="notice oak worry limit wrap speak medal online prefer cluster roof addict wrist behave treat actual wasp year salad speed social layer crew genius"
@@ -22,12 +23,17 @@ echo "Chain ID: $CHAIN_ID"
 echo "Moniker: $MONIKER"
 echo "Home: $TERRA_HOME"
 
+update_genesis() {
+    local genesis="$TERRA_HOME/config/genesis.json"
+    jq "$1" "$genesis" > "${genesis}.tmp" && mv "${genesis}.tmp" "$genesis"
+}
+
 # Initialize chain
-echo "[1/6] Initializing chain..."
+echo "[1/7] Initializing chain..."
 terrad init "$MONIKER" --chain-id "$CHAIN_ID" --home "$TERRA_HOME"
 
 # Import test account
-echo "[2/6] Importing test account..."
+echo "[2/7] Importing test account..."
 echo "$TEST_MNEMONIC" | terrad keys add test1 --recover --keyring-backend test --home "$TERRA_HOME"
 
 # Get test account address
@@ -35,7 +41,7 @@ TEST_ADDRESS=$(terrad keys show test1 -a --keyring-backend test --home "$TERRA_H
 echo "Test account: $TEST_ADDRESS"
 
 # Add genesis account with funds
-echo "[3/6] Adding genesis account with funds..."
+echo "[3/7] Adding genesis account with funds..."
 terrad add-genesis-account "$TEST_ADDRESS" \
     1000000000000uluna,\
 10000000000000uusd,\
@@ -48,19 +54,36 @@ terrad add-genesis-account "$TEST_ADDRESS" \
     --keyring-backend test \
     --home "$TERRA_HOME"
 
+# SDK 0.53 defaults bond_denom to "stake"; align genesis with Terra Classic denoms
+echo "[4/7] Configuring genesis parameters..."
+update_genesis '.app_state["mint"]["params"]["mint_denom"]="'$DENOM'"'
+update_genesis '.app_state["gov"]["deposit_params"]["min_deposit"]=[{"denom":"'$DENOM'","amount": "1000000"}]'
+update_genesis '.app_state["gov"]["params"]["min_deposit"]=[{"denom":"'$DENOM'","amount": "1000000"}]'
+update_genesis '.app_state["gov"]["params"]["voting_period"]="30s"'
+update_genesis '.app_state["gov"]["voting_params"]["voting_period"]="30s"'
+if jq -e '.app_state["gov"]["params"]["expedited_voting_period"]' "$TERRA_HOME/config/genesis.json" > /dev/null 2>&1; then
+    update_genesis '.app_state["gov"]["params"]["expedited_voting_period"]="4s"'
+fi
+update_genesis '.app_state["crisis"]["constant_fee"]={"denom":"'$DENOM'","amount":"1000"}'
+update_genesis '.app_state["staking"]["params"]["bond_denom"]="'$DENOM'"'
+
 # Create validator genesis transaction
-echo "[4/6] Creating validator..."
+echo "[5/7] Creating validator..."
 terrad gentx test1 10000000uluna \
+    --commission-rate=0.01 \
+    --commission-max-rate=0.02 \
     --chain-id "$CHAIN_ID" \
     --keyring-backend test \
     --home "$TERRA_HOME"
 
 # Collect genesis transactions
-echo "[5/6] Collecting genesis transactions..."
+echo "[6/7] Collecting genesis transactions..."
 terrad collect-gentxs --home "$TERRA_HOME"
 
+terrad validate-genesis --home "$TERRA_HOME" || echo "WARNING: validate-genesis failed, continuing anyway..."
+
 # Configure for local development
-echo "[6/6] Configuring for local development..."
+echo "[7/7] Configuring for local development..."
 
 CONFIG_TOML="$TERRA_HOME/config/config.toml"
 APP_TOML="$TERRA_HOME/config/app.toml"
@@ -80,8 +103,9 @@ sed -i 's/laddr = "tcp:\/\/127.0.0.1:26657"/laddr = "tcp:\/\/0.0.0.0:26657"/g' "
 # Enable CORS for development
 sed -i 's/cors_allowed_origins = \[\]/cors_allowed_origins = ["*"]/g' "$CONFIG_TOML"
 
-# Enable REST API
-sed -i 's/enable = false/enable = true/g' "$APP_TOML"
+# Enable REST API (first enable = false is the API server toggle)
+sed -i '0,/enable = false/s//enable = true/' "$APP_TOML"
+sed -i 's/swagger = false/swagger = true/' "$APP_TOML"
 sed -i 's/address = "tcp:\/\/localhost:1317"/address = "tcp:\/\/0.0.0.0:1317"/g' "$APP_TOML"
 sed -i 's/enabled-unsafe-cors = false/enabled-unsafe-cors = true/g' "$APP_TOML"
 

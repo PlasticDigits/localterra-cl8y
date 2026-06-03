@@ -10,7 +10,7 @@ The official `classic-terra/localterra` repository doesn't publish pre-built Doc
 - **Fast block times** (200ms instead of 5s)
 - **Pre-funded test accounts** with LUNC, USTC, and other tokens
 - **All APIs enabled** (RPC, LCD, gRPC)
-- **CosmWasm 1.5.x support** for smart contract development
+- **CosmWasm support** for smart contract development (Cosmos SDK 0.53 / core v4.x)
 
 ## Quick Start
 
@@ -21,7 +21,7 @@ The official `classic-terra/localterra` repository doesn't publish pre-built Doc
 docker run -p 26657:26657 -p 1317:1317 -p 9090:9090 ghcr.io/plasticdigits/localterra-cl8y:latest
 
 # Or pin to a specific Terra Classic core version
-docker run -p 26657:26657 -p 1317:1317 -p 9090:9090 ghcr.io/plasticdigits/localterra-cl8y:v3.6.2
+docker run -p 26657:26657 -p 1317:1317 -p 9090:9090 ghcr.io/plasticdigits/localterra-cl8y:v4.0.1
 ```
 
 ### Using Docker Compose
@@ -170,8 +170,8 @@ Images are tagged to match [Terra Classic core releases](https://github.com/clas
 | Tag | Description |
 |-----|-------------|
 | `latest` | Current mainnet version (auto-detected from live RPC) |
-| `v3.6.2` | Pinned to Terra Classic core v3.6.2 |
-| `v3.6.1`, `v3.6.0`, ... | All stable releases available |
+| `v4.0.1` | Pinned to Terra Classic core v4.0.1 (Cosmos SDK 0.53) |
+| `v4.0.0`, `v3.6.2`, `v3.6.1`, ... | All stable releases available |
 
 The `latest` tag always points to the version running on Terra Classic mainnet (columbus-5), never to release candidates. This is auto-detected by querying public RPC endpoints.
 
@@ -179,12 +179,12 @@ The `latest` tag always points to the version running on Terra Classic mainnet (
 
 ```bash
 # Build with a specific Terra Classic core version
-docker build --build-arg TERRA_VERSION=v3.6.2 -t localterra-cl8y:v3.6.2 .
+docker build --build-arg TERRA_VERSION=v4.0.1 -t localterra-cl8y:v4.0.1 .
 ```
 
 ## CosmWasm Version
 
-This image uses **wasmvm v3** which supports **CosmWasm 1.5.x** contracts. This is the same version running on Terra Classic mainnet.
+This image uses **wasmd 0.61.x** with **wasmvm v3**, matching Terra Classic mainnet (core v4.0.1 / Cosmos SDK 0.53).
 
 ## License
 

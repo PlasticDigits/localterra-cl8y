@@ -6,7 +6,7 @@
 # - Called by sync-releases workflow
 #
 # The image is tagged with:
-# - The Terra Classic core version (e.g., v3.6.2)
+# - The Terra Classic core version (e.g., v4.0.1)
 # - 'latest' when building the current mainnet version
 #
 # No setup required - uses GitHub's built-in container registry (ghcr.io)
@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       terra_version:
-        description: 'Terra Classic core version to build (e.g., v3.6.2). Leave empty to auto-detect mainnet version.'
+        description: 'Terra Classic core version to build (e.g., v4.0.1). Leave empty to auto-detect mainnet version.'
         required: false
         type: string
       tag_as_latest:
@@ -97,7 +97,7 @@ jobs:
             # Fallback if all LCD queries failed
             if [[ -z "$VERSION" ]]; then
               echo "All LCD queries failed, using fallback version"
-              VERSION="v3.6.2"
+              VERSION="v4.0.1"
             fi
             
             # Ensure version has 'v' prefix

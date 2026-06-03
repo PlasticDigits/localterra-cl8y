@@ -4,7 +4,7 @@
 # - Fast block times (200ms)
 # - Pre-funded test accounts
 # - All APIs enabled (RPC, LCD, gRPC)
-# - CosmWasm 1.5.x support
+# - CosmWasm support (wasmd 0.61.x / wasmvm v3)
 #
 # Based on: https://github.com/classic-terra/core/blob/main/Dockerfile
 #
@@ -21,7 +21,7 @@ FROM golang:1.24-bookworm AS builder
 
 # Terra Classic core version to build
 # Default matches current mainnet - override with --build-arg TERRA_VERSION=vX.Y.Z
-ARG TERRA_VERSION=v3.6.2
+ARG TERRA_VERSION=v4.0.1
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -53,7 +53,7 @@ RUN WASMVM_SO=$(find /go/pkg/mod -name "libwasmvm.x86_64.so" -type f | head -1) 
 FROM debian:bookworm-slim
 
 # Re-declare ARG to use in this stage (ARGs don't persist across FROM)
-ARG TERRA_VERSION=v3.6.2
+ARG TERRA_VERSION=v4.0.1
 
 # Labels for image metadata
 LABEL org.opencontainers.image.source="https://github.com/PlasticDigits/localterra-cl8y"
